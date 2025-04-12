@@ -141,6 +141,49 @@ export const requireRole = (roles) => {
 };
 
 /**
+ * Check if user has specific permissions
+ */
+export const checkAuth = (roles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: "ERR_UNAUTHORIZED",
+          message: "Authentication required",
+        },
+        meta: {
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    // If no roles specified or user is admin, allow access
+    if (!roles || roles.length === 0 || req.user.role === "admin") {
+      return next();
+    }
+
+    const userRole = req.user.role;
+    const rolesArray = Array.isArray(roles) ? roles : [roles];
+
+    if (!rolesArray.includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: "ERR_FORBIDDEN",
+          message: "Insufficient permissions",
+        },
+        meta: {
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+
+    next();
+  };
+};
+
+/**
  * Generate JWT token for a user
  */
 export const generateToken = (user) => {
