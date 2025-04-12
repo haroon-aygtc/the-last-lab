@@ -2,33 +2,59 @@
  * User Activity Repository
  *
  * Repository for user activity-related database operations
+ * Implements the IUserActivityRepository interface from the domain layer
  */
 
 import { BaseRepository } from "./BaseRepository";
-import { UserActivity, UserSession } from "../types";
+import { UserSession } from "../types";
 import logger from "../../src/utils/logger";
+import {
+  IUserActivityRepository,
+  UserActivity,
+} from "../core/domain/repositories/IUserActivityRepository";
 
-export class UserActivityRepository extends BaseRepository<UserActivity> {
+export class UserActivityRepository
+  extends BaseRepository<UserActivity>
+  implements IUserActivityRepository
+{
   constructor() {
     super("user_activity");
   }
 
   /**
-   * Find activities by user ID
+   * Log user activity
+   * @param activity The activity to log
+   * @returns The ID of the created activity
    */
-  async findByUserId(
+  async logActivity(activity: UserActivity): Promise<string> {
+    try {
+      const result = await this.create(activity);
+      return result.id || "";
+    } catch (error) {
+      logger.error("Error in UserActivityRepository.logActivity:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get activities by user ID
+   * @param userId The user ID to get activities for
+   * @param options Optional parameters for filtering and pagination
+   * @returns Object containing the activities and total count
+   */
+  async getActivitiesByUserId(
     userId: string,
     options: {
       limit?: number;
       offset?: number;
       startDate?: string;
       endDate?: string;
-      action?: string;
+      actions?: string[];
     } = {},
   ): Promise<{ data: UserActivity[]; total: number }> {
     try {
       const db = await this.getDb();
-      const { limit = 50, offset = 0, startDate, endDate, action } = options;
+      const { limit = 50, offset = 0, startDate, endDate, actions } = options;
 
       // Build query conditions
       let whereClause = "WHERE user_id = ?";
@@ -44,9 +70,9 @@ export class UserActivityRepository extends BaseRepository<UserActivity> {
         replacements.push(endDate);
       }
 
-      if (action) {
-        whereClause += " AND action = ?";
-        replacements.push(action);
+      if (actions && actions.length > 0) {
+        whereClause += " AND action IN (?)";
+        replacements.push(actions);
       }
 
       // Get total count
@@ -73,19 +99,103 @@ export class UserActivityRepository extends BaseRepository<UserActivity> {
         total,
       };
     } catch (error) {
-      logger.error("Error in UserActivityRepository.findByUserId:", error);
+      logger.error(
+        "Error in UserActivityRepository.getActivitiesByUserId:",
+        error,
+      );
       throw error;
     }
   }
 
   /**
-   * Log user activity
+   * Get recent activities across all users
+   * @param options Optional parameters for filtering and pagination
+   * @returns Object containing the activities and total count
    */
-  async logActivity(activity: Partial<UserActivity>): Promise<UserActivity> {
+  async getRecentActivities(
+    options: {
+      limit?: number;
+      offset?: number;
+      startDate?: string;
+      endDate?: string;
+      actions?: string[];
+    } = {},
+  ): Promise<{ data: UserActivity[]; total: number }> {
     try {
-      return await this.create(activity);
+      const db = await this.getDb();
+      const { limit = 50, offset = 0, startDate, endDate, actions } = options;
+
+      // Build query conditions
+      let whereClause = "WHERE 1=1";
+      const replacements: any[] = [];
+
+      if (startDate) {
+        whereClause += " AND created_at >= ?";
+        replacements.push(startDate);
+      }
+
+      if (endDate) {
+        whereClause += " AND created_at <= ?";
+        replacements.push(endDate);
+      }
+
+      if (actions && actions.length > 0) {
+        whereClause += " AND action IN (?)";
+        replacements.push(actions);
+      }
+
+      // Get total count
+      const [countResult] = await db.query(
+        `SELECT COUNT(*) as total FROM ${this.tableName} ${whereClause}`,
+        { replacements },
+      );
+
+      const total = countResult[0].total;
+
+      // Get paginated data
+      const [data] = await db.query(
+        `SELECT * FROM ${this.tableName} 
+         ${whereClause} 
+         ORDER BY created_at DESC 
+         LIMIT ? OFFSET ?`,
+        {
+          replacements: [...replacements, limit, offset],
+        },
+      );
+
+      return {
+        data: data as UserActivity[],
+        total,
+      };
     } catch (error) {
-      logger.error("Error in UserActivityRepository.logActivity:", error);
+      logger.error(
+        "Error in UserActivityRepository.getRecentActivities:",
+        error,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Delete activities older than the specified date
+   * @param date The cutoff date
+   * @returns The number of deleted activities
+   */
+  async deleteActivitiesOlderThan(date: string): Promise<number> {
+    try {
+      const db = await this.getDb();
+
+      const [result] = await db.query(
+        `DELETE FROM ${this.tableName} WHERE created_at < ?`,
+        { replacements: [date] },
+      );
+
+      return result.affectedRows || 0;
+    } catch (error) {
+      logger.error(
+        "Error in UserActivityRepository.deleteActivitiesOlderThan:",
+        error,
+      );
       throw error;
     }
   }

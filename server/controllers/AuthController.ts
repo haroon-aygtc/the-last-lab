@@ -10,10 +10,12 @@ import {
   UserActivityRepository,
   UserSessionRepository,
 } from "../repositories/UserActivityRepository";
+import { TokenService } from "../services/TokenService";
 import { v4 as uuidv4 } from "uuid";
 import jwt from "jsonwebtoken";
 import logger from "../../src/utils/logger";
 import { AuthenticatedRequest } from "../types";
+import { LoginUseCase } from "../core/application/usecases/auth/LoginUseCase";
 
 // JWT secret from environment variables
 const JWT_SECRET =
@@ -27,11 +29,22 @@ export class AuthController {
   private userRepository: UserRepository;
   private userActivityRepository: UserActivityRepository;
   private userSessionRepository: UserSessionRepository;
+  private tokenService: TokenService;
+  private loginUseCase: LoginUseCase;
 
   constructor() {
     this.userRepository = new UserRepository();
     this.userActivityRepository = new UserActivityRepository();
     this.userSessionRepository = new UserSessionRepository();
+    this.tokenService = new TokenService();
+
+    // Initialize LoginUseCase with dependencies
+    this.loginUseCase = LoginUseCase.create(
+      this.userRepository,
+      this.userSessionRepository,
+      this.userActivityRepository,
+      this.tokenService,
+    );
   }
 
   /**
@@ -51,73 +64,32 @@ export class AuthController {
         });
       }
 
-      // Verify credentials
-      const user = await this.userRepository.verifyCredentials(email, password);
+      // Use the LoginUseCase to handle login logic
+      const result = await this.loginUseCase.execute({
+        email,
+        password,
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"] as string,
+      });
 
-      if (!user) {
-        return res.status(401).json({
+      if (!result.success) {
+        // Handle error response based on error code
+        const statusCode = this.getStatusCodeForError(result.error?.code);
+        return res.status(statusCode).json({
           success: false,
-          error: {
-            code: "ERR_INVALID_CREDENTIALS",
-            message: "Invalid email or password",
+          error: result.error,
+          meta: {
+            timestamp: new Date().toISOString(),
           },
         });
       }
 
-      // Check if user is active
-      if (user.status !== "active") {
-        return res.status(403).json({
-          success: false,
-          error: {
-            code: "ERR_ACCOUNT_INACTIVE",
-            message: "Your account is not active",
-          },
-        });
-      }
-
-      // Generate tokens
-      const token = this.generateToken(user);
-      const refreshToken = this.generateRefreshToken(user);
-
-      // Update last login
-      await this.userRepository.updateLastLogin(user.id);
-
-      // Create session
-      const sessionId = uuidv4();
-      const expiresAt = new Date();
-      expiresAt.setDate(expiresAt.getDate() + 7); // 7 days from now
-
-      await this.userSessionRepository.create({
-        id: sessionId,
-        user_id: user.id,
-        token,
-        refresh_token: refreshToken,
-        ip_address: req.ip,
-        user_agent: req.headers["user-agent"],
-        expires_at: expiresAt.toISOString(),
-        status: "active",
-      });
-
-      // Log activity
-      await this.userActivityRepository.logActivity({
-        user_id: user.id,
-        action: "login",
-        ip_address: req.ip,
-        user_agent: req.headers["user-agent"],
-      });
-
+      // Return successful response
       return res.json({
         success: true,
-        data: {
-          user: {
-            id: user.id,
-            email: user.email,
-            name: user.name,
-            role: user.role,
-          },
-          token,
-          refreshToken,
-          expiresAt: expiresAt.toISOString(),
+        data: result.data,
+        meta: {
+          timestamp: new Date().toISOString(),
         },
       });
     } catch (error) {
@@ -127,6 +99,9 @@ export class AuthController {
         error: {
           code: "ERR_SERVER",
           message: "An error occurred during login",
+        },
+        meta: {
+          timestamp: new Date().toISOString(),
         },
       });
     }
@@ -163,7 +138,7 @@ export class AuthController {
       }
 
       // Create user
-      const user = await this.userRepository.createUser({
+      const user = await this.userRepository.create({
         email,
         password,
         name,
@@ -172,8 +147,8 @@ export class AuthController {
       });
 
       // Generate tokens
-      const token = this.generateToken(user);
-      const refreshToken = this.generateRefreshToken(user);
+      const token = this.tokenService.generateAccessToken(user);
+      const refreshToken = this.tokenService.generateRefreshToken(user);
 
       // Create session
       const sessionId = uuidv4();
@@ -257,19 +232,8 @@ export class AuthController {
       }
 
       // Verify refresh token
-      try {
-        const decoded = jwt.verify(refreshToken, JWT_SECRET) as {
-          userId: string;
-          tokenType: string;
-        };
-
-        if (
-          decoded.tokenType !== "refresh" ||
-          decoded.userId !== session.user_id
-        ) {
-          throw new Error("Invalid token");
-        }
-      } catch (error) {
+      const decoded = this.tokenService.verifyRefreshToken(refreshToken);
+      if (!decoded || decoded.userId !== session.user_id) {
         // Terminate the session if token is invalid
         await this.userSessionRepository.terminateSession(session.id);
 
@@ -285,7 +249,7 @@ export class AuthController {
       // Get user
       const user = await this.userRepository.findById(session.user_id);
 
-      if (!user || user.status !== "active") {
+      if (!user || !user.isActive()) {
         await this.userSessionRepository.terminateSession(session.id);
 
         return res.status(401).json({
@@ -298,8 +262,8 @@ export class AuthController {
       }
 
       // Generate new tokens
-      const newToken = this.generateToken(user);
-      const newRefreshToken = this.generateRefreshToken(user);
+      const newToken = this.tokenService.generateAccessToken(user);
+      const newRefreshToken = this.tokenService.generateRefreshToken(user);
 
       // Update session
       const expiresAt = new Date();
@@ -537,32 +501,21 @@ export class AuthController {
   };
 
   /**
-   * Generate JWT token
+   * Helper method to get HTTP status code based on error code
    */
-  private generateToken(user: any): string {
-    return jwt.sign(
-      {
-        userId: user.id,
-        email: user.email,
-        role: user.role,
-      },
-      JWT_SECRET,
-      { expiresIn: TOKEN_EXPIRY },
-    );
-  }
+  private getStatusCodeForError(errorCode?: string): number {
+    if (!errorCode) return 500;
 
-  /**
-   * Generate refresh token
-   */
-  private generateRefreshToken(user: any): string {
-    return jwt.sign(
-      {
-        userId: user.id,
-        tokenType: "refresh",
-      },
-      JWT_SECRET,
-      { expiresIn: REFRESH_TOKEN_EXPIRY },
-    );
+    switch (errorCode) {
+      case "ERR_MISSING_CREDENTIALS":
+        return 400;
+      case "ERR_INVALID_CREDENTIALS":
+        return 401;
+      case "ERR_ACCOUNT_INACTIVE":
+        return 403;
+      default:
+        return 500;
+    }
   }
 }
 
