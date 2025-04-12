@@ -5,6 +5,7 @@ import type {
   ChatSession as ApiChatSession,
   ChatMessage as ApiChatMessage,
 } from "./api/features/chat";
+import { Attachment, Message, MessageStatus } from "@/types/chat";
 
 export interface ChatMessage {
   id: string;
@@ -14,6 +15,9 @@ export interface ChatMessage {
   type: "user" | "assistant" | "system";
   metadata?: Record<string, any>;
   created_at: Date;
+  status?: MessageStatus;
+  attachments?: Attachment[];
+  followUpQuestions?: string[];
 }
 
 export interface ChatSession {
@@ -46,6 +50,64 @@ const mapApiMessageToLocal = (apiMessage: ApiChatMessage): ChatMessage => ({
   type: apiMessage.type === "ai" ? "assistant" : apiMessage.type,
   metadata: apiMessage.metadata,
   created_at: new Date(apiMessage.createdAt),
+  status: apiMessage.status as MessageStatus,
+  attachments: apiMessage.attachments as Attachment[],
+  followUpQuestions: apiMessage.followUpQuestions as string[],
+});
+
+// Convert local message format to API format
+const mapLocalMessageToApi = (message: Partial<ChatMessage>) => ({
+  sessionId: message.session_id,
+  content: message.content,
+  type: message.type === "assistant" ? "ai" : message.type,
+  metadata: message.metadata,
+  userId: message.user_id,
+  attachments: message.attachments,
+  status: message.status,
+  followUpQuestions: message.followUpQuestions,
+});
+
+// Convert Message from types/chat.ts to ChatMessage
+const mapMessageToChatMessage = (
+  message: Message,
+  sessionId: string,
+): ChatMessage => ({
+  id: message.id,
+  session_id: sessionId,
+  user_id: message.metadata?.userId,
+  content: message.content,
+  type:
+    message.sender === "assistant"
+      ? "assistant"
+      : message.sender === "user"
+        ? "user"
+        : "system",
+  metadata: message.metadata,
+  created_at: message.timestamp,
+  status: message.status,
+  attachments: message.attachments,
+  followUpQuestions: message.followUpQuestions,
+});
+
+// Convert ChatMessage to Message from types/chat.ts
+const mapChatMessageToMessage = (chatMessage: ChatMessage): Message => ({
+  id: chatMessage.id,
+  content: chatMessage.content,
+  sender:
+    chatMessage.type === "assistant"
+      ? "assistant"
+      : chatMessage.type === "user"
+        ? "user"
+        : "system",
+  timestamp: chatMessage.created_at,
+  status: chatMessage.status,
+  attachments: chatMessage.attachments,
+  metadata: {
+    ...chatMessage.metadata,
+    userId: chatMessage.user_id,
+    sessionId: chatMessage.session_id,
+  },
+  followUpQuestions: chatMessage.followUpQuestions,
 });
 
 const chatService = {
@@ -179,13 +241,7 @@ const chatService = {
     message: Omit<ChatMessage, "id" | "created_at">,
   ): Promise<ChatMessage> => {
     try {
-      const response = await chatApi.sendMessage({
-        sessionId: message.session_id,
-        content: message.content,
-        type: message.type === "assistant" ? "ai" : message.type,
-        metadata: message.metadata,
-        userId: message.user_id,
-      });
+      const response = await chatApi.sendMessage(mapLocalMessageToApi(message));
 
       if (!response.success || !response.data) {
         throw new Error(
@@ -197,6 +253,36 @@ const chatService = {
     } catch (error) {
       logger.error("Error adding chat message:", error);
       throw new Error(`Failed to add chat message: ${error.message}`);
+    }
+  },
+
+  /**
+   * Send a message via WebSocket
+   */
+  sendMessage: async (
+    sessionId: string,
+    content: string,
+    type: "user" | "assistant" | "system" = "user",
+    attachments?: Attachment[],
+    metadata?: Record<string, any>,
+  ): Promise<ChatMessage> => {
+    try {
+      // Create a message object
+      const messageData = {
+        session_id: sessionId,
+        content,
+        type,
+        attachments,
+        metadata,
+        status: "sending" as MessageStatus,
+      };
+
+      // Send the message to the API
+      const response = await chatService.addMessage(messageData);
+      return response;
+    } catch (error) {
+      logger.error("Error sending message:", error);
+      throw new Error(`Failed to send message: ${error.message}`);
     }
   },
 
@@ -218,6 +304,14 @@ const chatService = {
       logger.error(`Error fetching messages for session ${sessionId}:`, error);
       throw new Error(`Failed to fetch chat messages: ${error.message}`);
     }
+  },
+
+  /**
+   * Get session messages as Message[] type
+   */
+  getSessionMessages: async (sessionId: string): Promise<Message[]> => {
+    const chatMessages = await chatService.getMessagesBySessionId(sessionId);
+    return chatMessages.map(mapChatMessageToMessage);
   },
 
   /**
@@ -259,6 +353,36 @@ const chatService = {
    */
   reopenSession: async (sessionId: string): Promise<ChatSession> => {
     return chatService.updateSession(sessionId, { status: "active" });
+  },
+
+  /**
+   * Mark a message as read
+   */
+  markMessageAsRead: async (messageId: string): Promise<boolean> => {
+    try {
+      const response = await chatApi.updateMessageStatus(messageId, "read");
+      return response.success;
+    } catch (error) {
+      logger.error(`Error marking message ${messageId} as read:`, error);
+      return false;
+    }
+  },
+
+  /**
+   * Add a reaction to a message
+   */
+  addReaction: async (
+    messageId: string,
+    reaction: string,
+    userId?: string,
+  ): Promise<boolean> => {
+    try {
+      const response = await chatApi.addReaction(messageId, reaction, userId);
+      return response.success;
+    } catch (error) {
+      logger.error(`Error adding reaction to message ${messageId}:`, error);
+      return false;
+    }
   },
 };
 

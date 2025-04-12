@@ -2,11 +2,14 @@ import React from "react";
 import { cn } from "@/lib/utils";
 
 interface TypingIndicatorProps {
-  isTyping: boolean;
+  isTyping?: boolean;
   className?: string;
 }
 
-const TypingIndicator = ({ isTyping, className }: TypingIndicatorProps) => {
+const TypingIndicator = ({
+  isTyping = true,
+  className,
+}: TypingIndicatorProps) => {
   if (!isTyping) return null;
 
   return (

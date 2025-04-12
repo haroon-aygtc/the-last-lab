@@ -8,8 +8,19 @@ import jwt from "jsonwebtoken";
 import { User } from "../../../src/models/index.js";
 
 // JWT secret from environment variables
-const JWT_SECRET =
-  process.env.JWT_SECRET || "your-secret-key-change-this-in-production";
+const JWT_SECRET = process.env.JWT_SECRET;
+
+// Ensure JWT_SECRET is set in production
+if (!JWT_SECRET && process.env.NODE_ENV === "production") {
+  console.error(
+    "ERROR: JWT_SECRET environment variable is not set in production mode!",
+  );
+  process.exit(1); // Exit the application if JWT_SECRET is not set in production
+}
+
+// Fallback for development only
+const DEV_JWT_SECRET = "dev-jwt-secret-do-not-use-in-production";
+const ACTIVE_JWT_SECRET = JWT_SECRET || DEV_JWT_SECRET;
 
 /**
  * Authenticate JWT token middleware
@@ -34,7 +45,7 @@ export const authenticateJWT = async (req, res, next) => {
     const token = authHeader.split(" ")[1];
 
     // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, ACTIVE_JWT_SECRET);
 
     // Check if user exists and is active
     const user = await User.findOne({
@@ -189,7 +200,33 @@ export const checkAuth = (roles) => {
 export const generateToken = (user) => {
   return jwt.sign(
     { userId: user.id, email: user.email, role: user.role },
-    JWT_SECRET,
+    ACTIVE_JWT_SECRET,
     { expiresIn: "24h" },
   );
+};
+
+/**
+ * Generate a refresh token for a user
+ */
+export const generateRefreshToken = (user) => {
+  return jwt.sign(
+    { userId: user.id, tokenType: "refresh" },
+    ACTIVE_JWT_SECRET,
+    { expiresIn: "7d" },
+  );
+};
+
+/**
+ * Verify a refresh token
+ */
+export const verifyRefreshToken = (token) => {
+  try {
+    const decoded = jwt.verify(token, ACTIVE_JWT_SECRET);
+    if (decoded.tokenType !== "refresh") {
+      throw new Error("Invalid token type");
+    }
+    return decoded;
+  } catch (error) {
+    throw error;
+  }
 };
