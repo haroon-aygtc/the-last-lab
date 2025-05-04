@@ -19,36 +19,9 @@ import userRoutes from "./userRoutes.js";
 import widgetRoutes from "./widgetRoutes.js";
 import aiRoutes from "./aiRoutes.js";
 import responseFormattingRoutes from "./responseFormattingRoutes.js";
-import moderationRoutes from "./moderationRoutes.js";
-import notificationRoutes from "./notificationRoutes.js";
-import userActivityRoutes from "./userActivityRoutes.js";
-import followUpQuestionRoutes from "./followUpQuestionRoutes.js";
-import scrapingRoutes from "./scrapingRoutes.js";
 import { authenticateJWT } from "../middleware/auth.js";
-import rateLimit from "express-rate-limit";
 
 const router = express.Router();
-
-// Configure rate limiting
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-  message: {
-    success: false,
-    error: {
-      code: "ERR_RATE_LIMIT",
-      message: "Too many requests, please try again later.",
-    },
-    meta: {
-      timestamp: new Date().toISOString(),
-    },
-  },
-});
-
-// Apply rate limiting to all routes
-router.use(apiLimiter);
 
 // Health check endpoint (no auth required)
 router.get("/health", (req, res) => {
@@ -76,11 +49,6 @@ router.use("/users", authenticateJWT, userRoutes);
 router.use("/widget-configs", authenticateJWT, widgetRoutes);
 router.use("/ai", authenticateJWT, aiRoutes);
 router.use("/response-formatting", authenticateJWT, responseFormattingRoutes);
-router.use("/moderation", authenticateJWT, moderationRoutes);
-router.use("/notifications", authenticateJWT, notificationRoutes);
-router.use("/users", userActivityRoutes);
-router.use("/follow-up-questions", authenticateJWT, followUpQuestionRoutes);
-router.use("/scraping", authenticateJWT, scrapingRoutes);
 
 // 404 handler for API routes
 router.use((req, res) => {

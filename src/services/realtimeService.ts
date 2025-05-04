@@ -6,8 +6,8 @@
  */
 
 import logger from "@/utils/logger";
+import { getMySQLClient } from "./mysqlClient";
 import websocketService from "./websocketService";
-import { api } from "./api/middleware/apiMiddleware";
 
 type NotificationCallback = (notification: any) => void;
 type TableChangeCallback = (payload: any) => void;
@@ -209,17 +209,19 @@ export const realtimeService = {
     try {
       if (!userId) return [];
 
-      const response = await api.get<any[]>(`/notifications/user/${userId}`, {
-        params: { limit, read: false },
-      });
+      const sequelize = await getMySQLClient();
 
-      if (!response.success) {
-        throw new Error(
-          response.error?.message || "Failed to fetch notifications",
-        );
-      }
+      const notifications = await sequelize.query(
+        `SELECT * FROM notifications 
+         WHERE user_id = ? AND read = false 
+         ORDER BY created_at DESC LIMIT ?`,
+        {
+          replacements: [userId, limit],
+          type: sequelize.QueryTypes.SELECT,
+        },
+      );
 
-      return response.data || [];
+      return notifications || [];
     } catch (error) {
       logger.error("Error fetching notifications", error);
       return [];
@@ -233,16 +235,18 @@ export const realtimeService = {
     try {
       if (notificationIds.length === 0) return true;
 
-      const response = await api.put<{ success: boolean }>(
-        "/notifications/mark-read",
-        { notificationIds },
-      );
+      const sequelize = await getMySQLClient();
 
-      if (!response.success) {
-        throw new Error(
-          response.error?.message || "Failed to mark notifications as read",
-        );
-      }
+      // Build placeholders for the IN clause
+      const placeholders = notificationIds.map(() => "?").join(",");
+
+      await sequelize.query(
+        `UPDATE notifications SET read = true WHERE id IN (${placeholders})`,
+        {
+          replacements: [...notificationIds],
+          type: sequelize.QueryTypes.UPDATE,
+        },
+      );
 
       return true;
     } catch (error) {

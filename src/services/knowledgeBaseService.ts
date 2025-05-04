@@ -334,32 +334,29 @@ class KnowledgeBaseService {
         return cachedResult;
       }
 
-      // Use the API to query the database based on the connection string
-      if (kb.connectionString) {
+      // In a production environment, you would:
+      // 1. Parse the connection string to determine the database type
+      // 2. Establish a connection to the database
+      // 3. Execute a query based on the params.query
+      // 4. Transform the results to QueryResult format
+
+      // For now, we'll use a direct MySQL query if the connection string is a MySQL URL
+      if (kb.connectionString.includes("mysql")) {
         try {
           // Extract table name from parameters
           const tableName = kb.parameters?.table || "documents";
           const searchColumn = kb.parameters?.searchColumn || "content";
 
-          // Use the API to query the database
-          const response = await api.post<any[]>(
-            `/knowledge-bases/query-database`,
+          const sequelize = await getMySQLClient();
+
+          // Use MATCH AGAINST for full-text search if available, otherwise fallback to LIKE
+          const data = await sequelize.query(
+            `SELECT * FROM ${tableName} WHERE ${searchColumn} LIKE ? LIMIT ?`,
             {
-              connectionString: kb.connectionString,
-              tableName,
-              searchColumn,
-              query: params.query,
-              limit: params.limit || 5,
+              replacements: [`%${params.query}%`, params.limit || 5],
+              type: sequelize.QueryTypes.SELECT,
             },
           );
-
-          if (!response.success) {
-            throw new Error(
-              response.error?.message || "Failed to query database",
-            );
-          }
-
-          const data = response.data || [];
 
           if (data && data.length > 0) {
             const results: QueryResult[] = data.map((item) => ({
@@ -745,7 +742,49 @@ class KnowledgeBaseService {
     return cached.data;
   }
 
-  // API layer handles all data transformation between frontend and backend
+  // These mapping methods are no longer needed as the API layer handles the data transformation
+  // Keeping them commented in case they're needed for reference
+  /*
+  private mapConfigFromDb(data: any): KnowledgeBaseConfig {
+    return {
+      id: data.id,
+      name: data.name,
+      type: data.type,
+      endpoint: data.endpoint,
+      apiKey: data.api_key,
+      connectionString: data.connection_string,
+      refreshInterval: data.refresh_interval,
+      lastSyncedAt: data.last_synced_at,
+      parameters: data.parameters,
+      isActive: data.is_active,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
+    };
+  }
+
+  private mapConfigToDb(config: Partial<KnowledgeBaseConfig>): any {
+    const dbObject: any = {};
+
+    if (config.id !== undefined) dbObject.id = config.id;
+    if (config.name !== undefined) dbObject.name = config.name;
+    if (config.type !== undefined) dbObject.type = config.type;
+    if (config.endpoint !== undefined) dbObject.endpoint = config.endpoint;
+    if (config.apiKey !== undefined) dbObject.api_key = config.apiKey;
+    if (config.connectionString !== undefined)
+      dbObject.connection_string = config.connectionString;
+    if (config.refreshInterval !== undefined)
+      dbObject.refresh_interval = config.refreshInterval;
+    if (config.lastSyncedAt !== undefined)
+      dbObject.last_synced_at = config.lastSyncedAt;
+    if (config.parameters !== undefined)
+      dbObject.parameters = config.parameters;
+    if (config.isActive !== undefined) dbObject.is_active = config.isActive;
+    if (config.createdAt !== undefined) dbObject.created_at = config.createdAt;
+    if (config.updatedAt !== undefined) dbObject.updated_at = config.updatedAt;
+
+    return dbObject;
+  }
+  */
 
   /**
    * Sync a knowledge base to update its content

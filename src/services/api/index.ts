@@ -18,7 +18,6 @@ import { widgetApi } from "./features/widget";
 import { contextRulesApi } from "./features/contextRules";
 import { followUpConfigApi } from "./features/followUpConfig";
 import { followUpQuestionsApi } from "./features/followUpQuestions";
-import { moderationApi } from "./features/moderation";
 import { responseFormattingApi } from "./features/responseFormatting";
 import { scrapingApi } from "./features/scraping";
 
@@ -40,7 +39,6 @@ export {
   contextRulesApi,
   followUpConfigApi,
   followUpQuestionsApi,
-  moderationApi,
   responseFormattingApi,
   scrapingApi,
 
